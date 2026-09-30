@@ -1,0 +1,542 @@
+--[================================================================]--
+-- MM2 Global Price Overlay Engine V47 (Redmean & Memory Safe)
+--[================================================================]--
+
+if shared.MM2PriceOverlay then
+    pcall(function() shared.MM2PriceOverlay:Destroy() end)
+end
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local Session = {
+    Connections = {},
+    Tags = {},
+    InjectedSlots = {}
+}
+shared.MM2PriceOverlay = Session
+
+function Session:Destroy()
+    for _, c in pairs(self.Connections) do c:Disconnect() end
+    for _, t in pairs(self.Tags) do 
+        if t and t.Parent then t:Destroy() end 
+    end
+    if self.Loop then task.cancel(self.Loop) end
+    self.Connections = {}
+    self.Tags = {}
+    self.InjectedSlots = {}
+end
+
+-- ЭТАЛОНЫ ЦВЕТОВ MM2
+local TIERS = {
+    ["common"] = Color3.fromRGB(106, 106, 106),
+    ["uncommon"] = Color3.fromRGB(0, 255, 255),
+    ["rare"] = Color3.fromRGB(0, 200, 0),
+    ["legendary"] = Color3.fromRGB(220, 0, 5),
+    ["godly"] = Color3.fromRGB(255, 0, 179),
+    ["ancient"] = Color3.fromRGB(100, 10, 255),
+    ["vintage"] = Color3.fromRGB(230, 200, 0),
+    ["unique"] = Color3.fromRGB(240, 140, 0)
+}
+
+-- АЛГОРИТМ REDMEAN ДЛЯ ТОЧНОГО ОПРЕДЕЛЕНИЯ ЦВЕТА
+local function dist2(a, b)
+    local rm = (a.R + b.R) / 2
+    local dr, dg, db = a.R - b.R, a.G - b.G, a.B - b.B
+    return (2 + rm) * dr * dr + 4 * dg * dg + (3 - rm) * db * db
+end
+
+-- БАЗА ДАННЫХ V45 (Starpets Auto-Parsed)
+local Database = {
+    -- 1. ЖЕСТКИЕ КОНФЛИКТЫ (Мусор с одинаковым именем и редкостью -> ❗️)
+    ["candy corn (common)"] = "!", ["bats (common)"] = "!", ["stickers (common)"] = "!",
+    ["love (common)"] = "!", ["coal (common)"] = "!", ["tree (common)"] = "!",
+    ["snowman (common)"] = "!", ["wrapped (common)"] = "!", ["zombie (common)"] = "!",
+    ["alien (common)"] = "!", ["cracks (common)"] = "!", ["clown (common)"] = "!",
+    ["elf (common)"] = "!", ["frozen (common)"] = "!", ["haunted (common)"] = "!",
+    ["mummy (uncommon)"] = "!", ["snowflakes (common)"] = "!", ["gingerbread (uncommon)"] = "!",
+    ["striped (common)"] = "!", ["leaves (common)"] = "!", ["carrot (common)"] = "!",
+    ["carrots (common)"] = "!", ["snowball (common)"] = "!", ["vampire (legendary)"] = "!",
+    ["traveler (legendary)"] = "!", ["cane (common)"] = "!", ["flora (common)"] = "!",
+    ["blue pumpkin (common)"] = "!", ["bat (common)"] = "!", ["brains (common)"] = "!",
+    ["gifts (common)"] = "!", ["ornament (common)"] = "!", ["sweater (uncommon)"] = "!",
+    ["pumpkin (common)"] = "!", ["potion (uncommon)"] = "!", ["doge (uncommon)"] = "!",
+    ["lights (common)"] = "!", ["slime (common)"] = "!", ["grave (common)"] = "!",
+    ["webs (common)"] = "!", ["ghosts (common)"] = "!", ["cookie (common)"] = "!",
+    ["hearts (common)"] = "!", ["ornaments (common)"] = "!", ["neon (common)"] = "!",
+    ["treats (common)"] = "!", ["treats (uncommon)"] = "!", ["vines (common)"] = "!",
+    ["santa (common)"] = "!", ["present (common)"] = "!", ["candied (common)"] = "!",
+    ["lava (uncommon)"] = "!", ["ufos (common)"] = "!", ["adurite (uncommon)"] = "!",
+    ["soda (uncommon)"] = "!", ["log (common)"] = "!", ["camo (common)"] = "!",
+    ["bluesteel (common)"] = "!", ["wavy (common)"] = "!", ["fragile (common)"] = "!",
+    ["strawberries (common)"] = "!", ["pine (common)"] = "!",
+
+    -- 2. БАЗОВЫЕ ИМЕНА-КАПКаНЫ
+    ["sunset"] = "!", ["blossom"] = "!", ["rainbow"] = "!", ["candy"] = "!", ["sugar"] = "!", ["chill"] = "!",
+    ["laser"] = "!", ["ghost"] = "!", ["shadow"] = "!", ["golden"] = "!", ["candleflame"] = "!", ["snowflake"] = "!",
+    ["latte"] = "!", ["bat"] = "!", ["brains"] = "!", ["zombified"] = "!", ["gingerbread"] = "!", ["darkbringer"] = "!",
+    ["lightbringer"] = "!", ["phantom"] = "!", ["makeshift"] = "!", ["holly"] = "!", ["palms"] = "!", ["molten"] = "!", 
+    ["emerald"] = "!", ["aquarium"] = "!", ["gothic"] = "!", ["mistletoe"] = "!", ["snowy"] = "!", ["canes"] = "!", 
+    ["monster"] = "!", ["portal"] = "!", ["bones"] = "!", ["spearmint"] = "!", ["gingercookie"] = "!", ["painted"] = "!", 
+    ["cat"] = "!", ["melon"] = "!", ["moons"] = "!", ["igloo"] = "!", ["ginger"] = "!", ["reindeer"] = "!", ["eyeball"] = "!", 
+    ["sun"] = "!", ["steel"] = "!", ["cavern"] = "!", ["coal"] = "!", ["love"] = "!", ["bats"] = "!", ["stickers"] = "!",
+    ["candy corn"] = "!", ["tree"] = "!", ["snowman"] = "!", ["wrapped"] = "!", ["zombie"] = "!", ["alien"] = "!",
+    ["cracks"] = "!", ["clown"] = "!", ["clownfish"] = "!", ["elf"] = "!", ["popsicle"] = "!", ["frozen"] = "!",
+    ["haunted"] = "!", ["starfish"] = "!", ["mummy"] = "!", ["snowflakes"] = "!", ["striped"] = "!", ["leaves"] = "!",
+    ["carrot"] = "!", ["carrots"] = "!", ["snowball"] = "!", ["vampire"] = "!", ["traveler"] = "!", ["aurora"] = "!",
+    ["cane"] = "!", ["flora"] = "!", ["blue pumpkin"] = "!", ["gifts"] = "!", ["ornament"] = "!", ["sweater"] = "!",
+    ["green pumpkin"] = "!", ["pumpkin"] = "!", ["candy swirl"] = "!", ["potion"] = "!", ["doge"] = "!", ["lights"] = "!",
+    ["energized"] = "!", ["frostfade"] = "!", ["slime"] = "!", ["grave"] = "!", ["snakebite"] = "!", ["webs"] = "!",
+    ["chromatic"] = "!", ["overseer"] = "!", ["cursed"] = "!", ["xeno"] = "!", ["stars"] = "!", ["frostflame"] = "!",
+    ["splash"] = "!", ["sketch"] = "!", ["predator"] = "!", ["ghosts"] = "!", ["cookie"] = "!", ["hearts"] = "!",
+    ["ornament2"] = "!", ["ornaments"] = "!", ["pop art"] = "!", ["ripper"] = "!", ["neon"] = "!", ["candies"] = "!",
+    ["treats"] = "!", ["vines"] = "!", ["santa"] = "!", ["present"] = "!", ["candied"] = "!", ["lava"] = "!",
+    ["ufos"] = "!", ["adurite"] = "!", ["soda"] = "!", ["log"] = "!", ["camo"] = "!", ["bluesteel"] = "!",
+    ["wavy"] = "!", ["fragile"] = "!", ["strawberries"] = "!",
+
+    -- 3. ANCIENTS, UNIQUE & VINTAGE
+    ["nik's scythe (ancient)"] = {0, 1460000}, ["corrupt (unique)"] = {0, 404.63}, ["gingerscope (ancient)"] = {0, 15380}, 
+    ["traveler's axe (ancient)"] = {0, 7640}, ["celestial (ancient)"] = {0, 2230}, ["vampire's axe (ancient)"] = {0, 1530}, 
+    ["harvester (ancient)"] = {0, 273.48}, ["icepiercer (ancient)"] = {0, 191.85}, ["icebreaker (ancient)"] = {0, 73.53}, 
+    ["batwing (ancient)"] = {0, 53.48}, ["elderwood scythe (ancient)"] = {0, 43.84}, ["swirly axe (ancient)"] = {0, 41.01}, 
+    ["hallowscythe (ancient)"] = {0, 31.24}, ["logchopper (ancient)"] = {0, 19.36}, ["icewing (ancient)"] = {0, 15.48},
+    ["blood (vintage)"] = {0, 8.59}, ["america (vintage)"] = {0, 7.53}, ["prince (vintage)"] = {0, 6.84}, 
+    ["phaser (vintage)"] = {0, 6.19}, ["cowboy (vintage)"] = {0, 4.81}, ["splitter (vintage)"] = {0, 3.23},
+    ["ghost (vintage)"] = {0, 9.17}, ["shadow (vintage)"] = {0, 6.45}, ["laser (vintage)"] = {0, 8.63}, 
+    ["golden (vintage)"] = {0, 4.29},
+
+    -- 4. CHROMAS
+    ["traveler's gun (chroma)"] = {0, 143780}, ["evergun (chroma)"] = {0, 55550}, ["evergreen (chroma)"] = {0, 40790}, 
+    ["bauble (chroma)"] = {0, 31440}, ["constellation (chroma)"] = {0, 30580}, ["vampire's gun (chroma)"] = {0, 28260}, 
+    ["alienbeam (chroma)"] = {0, 22800}, ["raygun (chroma)"] = {0, 14050}, ["sunrise (chroma)"] = {0, 10470}, 
+    ["snowcannon (chroma)"] = {0, 7640}, ["sunset (chroma)"] = {0, 7150}, ["blizzard (chroma)"] = {0, 6160}, 
+    ["snowstorm (chroma)"] = {0, 4100}, ["heart wand (chroma)"] = {0, 3980}, ["snow dagger (chroma)"] = {0, 2570}, 
+    ["watergun (chroma)"] = {0, 2340}, ["icecream (chroma)"] = {0, 2170}, ["ornament (chroma)"] = {0, 1860}, 
+    ["treat (chroma)"] = {0, 1720}, ["sweet (chroma)"] = {0, 1690}, ["sands (chroma)"] = {0, 1210}, 
+    ["beachy (chroma)"] = {0, 1120}, ["darkbringer (chroma)"] = {0, 71.67}, ["lightbringer (chroma)"] = {0, 68.72}, 
+    ["luger (chroma)"] = {0, 55.99}, ["laser (chroma)"] = {0, 43.45}, ["candleflame (chroma)"] = {0, 43.32}, 
+    ["elderwood blade (chroma)"] = {0, 41.27}, ["swirly gun (chroma)"] = {0, 41.13}, ["shark (chroma)"] = {0, 39.67}, 
+    ["gemstone (chroma)"] = {0, 38.78}, ["cookiecane (chroma)"] = {0, 38.72}, ["deathshard (chroma)"] = {0, 35.70}, 
+    ["fang (chroma)"] = {0, 34.82}, ["heat (chroma)"] = {0, 34.35}, ["slasher (chroma)"] = {0, 33.59}, 
+    ["seer (chroma)"] = {0, 30.48}, ["tides (chroma)"] = {0, 30.27}, ["gingerblade (chroma)"] = {0, 30.20}, 
+    ["saw (chroma)"] = {0, 25.58}, ["boneblade (chroma)"] = {0, 21.89}, ["fire bat (chroma)"] = {0, 5.95}, 
+    ["fire bear (chroma)"] = {0, 4.37}, ["fire pig (chroma)"] = {0, 4.36}, ["fire bunny (chroma)"] = {0, 3.89}, 
+    ["fire cat (chroma)"] = {0, 3.82}, ["fire dog (chroma)"] = {0, 3.23}, ["fire fox (chroma)"] = {0, 3.23},
+
+    -- 5. GODLIES
+    ["traveler's gun (godly)"] = {0, 4840}, ["evergun (godly)"] = {0, 3240}, ["constellation (godly)"] = {0, 2580}, 
+    ["evergreen (godly)"] = {0, 2560}, ["alienbeam (godly)"] = {0, 1930}, ["raygun (godly)"] = {0, 1880}, 
+    ["turkey (godly)"] = {0, 1880}, ["vampire's gun (godly)"] = {0, 1830}, ["darkshot (godly)"] = {0, 1760}, 
+    ["darksword (godly)"] = {0, 1740}, ["sakura (godly)"] = {0, 1290}, ["blossom (godly)"] = {0, 1340}, 
+    ["sunrise (godly)"] = {0, 1020}, ["snowcannon (godly)"] = {0, 734.96}, ["soul (godly)"] = {0, 699.13}, 
+    ["bauble (godly)"] = {0, 686.41}, ["spirit (godly)"] = {0, 668.58}, ["sunset (godly)"] = {0, 654.16}, 
+    ["rainbow gun (godly)"] = {0, 446.48}, ["flora (godly)"] = {0, 437.98}, ["xenoshot (godly)"] = {0, 431.92}, 
+    ["xenoknife (godly)"] = {0, 427.99}, ["rainbow (godly)"] = {0, 430.55}, ["bloom (godly)"] = {0, 419.17}, 
+    ["heart wand (godly)"] = {0, 378.46}, ["snowstorm (godly)"] = {0, 317.62}, ["blizzard (godly)"] = {0, 306.90}, 
+    ["ocean (godly)"] = {0, 278.94}, ["waves (godly)"] = {0, 271.08}, ["flowerwood gun (godly)"] = {0, 268.73}, 
+    ["flowerwood (godly)"] = {0, 258.54}, ["snow dagger (godly)"] = {0, 192.03}, ["watergun (godly)"] = {0, 170.56}, 
+    ["treat (godly)"] = {0, 166.38}, ["sweet (godly)"] = {0, 162.44}, ["icecream (godly)"] = {0, 155.39}, 
+    ["borealis (godly)"] = {0, 148.05}, ["australis (godly)"] = {0, 145.16}, ["bat (godly)"] = {0, 140.90}, 
+    ["candy (godly)"] = {0, 95.67}, ["sands (godly)"] = {0, 94.37}, ["beachy (godly)"] = {0, 94.04}, 
+    ["pearlshine (godly)"] = {0, 86.53}, ["pearl (godly)"] = {0, 80.18}, ["ornament (godly)"] = {0, 77.33}, 
+    ["heartblade (godly)"] = {0, 70.40}, ["spectre (godly)"] = {0, 39.99}, ["red luger (godly)"] = {0, 39.01}, 
+    ["phantom (godly)"] = {0, 38.59}, ["elderwood revolver (godly)"] = {0, 38.53}, ["sugar (godly)"] = {0, 38.09}, 
+    ["darkbringer (godly)"] = {0, 37.85}, ["iceblaster (godly)"] = {0, 37.05}, ["lightbringer (godly)"] = {0, 36.77}, 
+    ["makeshift (godly)"] = {0, 36.36}, ["elderwood blade (godly)"] = {0, 35.70}, ["candleflame (godly)"] = {0, 35.39}, 
+    ["green luger (godly)"] = {0, 25.39}, ["amerilaser (godly)"] = {0, 24.11}, ["laser (godly)"] = {0, 23.83}, 
+    ["hallowgun (godly)"] = {0, 23.78}, ["nightblade (godly)"] = {0, 23.29}, ["shark (godly)"] = {0, 21.45}, 
+    ["battleaxe ii (godly)"] = {0, 20.60}, ["luger (godly)"] = {0, 20.27}, ["plasmabeam (godly)"] = {0, 20.06}, 
+    ["icebeam (godly)"] = {0, 20.00}, ["swirly gun (godly)"] = {0, 19.15}, ["old glory (godly)"] = {0, 18.94}, 
+    ["pixel (godly)"] = {0, 18.86}, ["blaster (godly)"] = {0, 18.53}, ["battleaxe (godly)"] = {0, 18.25}, 
+    ["ginger luger (godly)"] = {0, 17.74}, ["vampire's edge (godly)"] = {0, 17.70}, ["minty (godly)"] = {0, 17.68}, 
+    ["iceflake (godly)"] = {0, 17.30}, ["plasmablade (godly)"] = {0, 16.69}, ["eternalcane (godly)"] = {0, 16.63}, 
+    ["gemstone (godly)"] = {0, 16.53}, ["slasher (godly)"] = {0, 16.47}, ["gingerblade (godly)"] = {0, 16.06}, 
+    ["nebula (godly)"] = {0, 14.89}, ["gingermint (godly)"] = {0, 14.79}, ["deathshard (godly)"] = {0, 14.37}, 
+    ["jinglegun (godly)"] = {0, 14.30}, ["virtual (godly)"] = {0, 14.27}, ["lugercane (godly)"] = {0, 14.20}, 
+    ["cookiecane (godly)"] = {0, 14.05}, ["swirly blade (godly)"] = {0, 13.63}, ["heat (godly)"] = {0, 11.64}, 
+    ["fang (godly)"] = {0, 11.39}, ["frostsaber (godly)"] = {0, 11.35}, ["chill (godly)"] = {0, 11.22}, 
+    ["tides (godly)"] = {0, 11.07}, ["spider (godly)"] = {0, 10.76}, ["clockwork (godly)"] = {0, 10.76}, 
+    ["ghostblade (godly)"] = {0, 10.61}, ["eternal iv (godly)"] = {0, 10.16}, ["hallow's edge (godly)"] = {0, 10.11}, 
+    ["xmas (godly)"] = {0, 10.08}, ["eternal iii (godly)"] = {0, 9.91}, ["handsaw (godly)"] = {0, 9.90}, 
+    ["bioblade (godly)"] = {0, 9.84}, ["prismatic (godly)"] = {0, 9.45}, ["eternal (godly)"] = {0, 9.11}, 
+    ["boneblade (godly)"] = {0, 9.03}, ["frostbite (godly)"] = {0, 8.97}, ["ice dragon (godly)"] = {0, 8.87}, 
+    ["hallow's blade (godly)"] = {0, 8.86}, ["eggblade (godly)"] = {0, 8.45}, ["snowflake (godly)"] = {0, 8.40}, 
+    ["peppermint (godly)"] = {0, 8.34}, ["winter's edge (godly)"] = {0, 8.22}, ["eternal ii (godly)"] = {0, 7.81}, 
+    ["saw (godly)"] = {0, 7.53}, ["ice shard (godly)"] = {0, 7.53}, ["pumpking (godly)"] = {0, 7.53}, 
+    ["cookieblade (godly)"] = {0, 6.60}, ["blue seer (godly)"] = {0, 4.95}, ["purple seer (godly)"] = {0, 4.95}, 
+    ["red seer (godly)"] = {0, 4.95}, ["seer (godly)"] = {0, 4.95}, ["orange seer (godly)"] = {0, 4.12}, 
+    ["yellow seer (godly)"] = {0, 3.85}, ["ghost (legendary)"] = {0, 5.81},
+
+    -- 6. ПЕТЫ 
+    ["zombie dog (common)"] = {0, 708.79}, ["elf (uncommon)"] = {0, 564.53}, ["blue pumpkin (uncommon)"] = {0, 265.13}, 
+    ["dogey (uncommon)"] = {0, 145.38}, ["red pumpkin (common)"] = {0, 114.20}, ["black cat (common)"] = {0, 78.86}, 
+    ["green pumpkin (common)"] = {0, 60.94}, ["mr. reindeer (rare)"] = {0, 53.27}, ["piggy (common)"] = {0, 47.65}, 
+    ["mr. snowman (common)"] = {0, 19.59}, ["red pumpkin (legendary)"] = {0, 16.21}, ["skully (legendary)"] = {0, 13.38}, 
+    ["pumpkin (rare)"] = {0, 11.62}, ["<3 (common)"] = {0, 11.21}, ["green pumpkin (rare)"] = {0, 9.22}, 
+    ["pumpkin (uncommon)"] = {0, 7.38}, ["shadow pumpkin (uncommon)"] = {0, 5.29}, ["reindeer (common)"] = {0, 5.24}, 
+    ["purple pumpkin (common)"] = {0, 4.72}, ["tankie (rare)"] = {0, 4.68}, ["fairy (uncommon)"] = {0, 4.68}, 
+    ["jetstream (rare)"] = {0, 4.37}, ["chilly (uncommon)"] = {0, 4.31}, ["seahorsey (uncommon)"] = {0, 3.86}, 
+    ["ghosty (godly)"] = {0, 0.94}, ["bunny (common)"] = {0, 0.50},
+
+    -- 7. ОСТАЛЬНЫЕ ПРЕДМЕТЫ
+    ["cane (rare)"] = {0, 509.96}, ["brains (uncommon)"] = {0, 131.63}, ["dungeon (rare)"] = {0, 128.84}, 
+    ["zombified (uncommon)"] = {0, 109.29}, ["ghoulish (common)"] = {0, 85.80}, ["darkknife (rare)"] = {0, 75.03}, 
+    ["glitch1 (common)"] = {0, 71.08}, ["silent night (rare)"] = {0, 49.47}, ["spectral (legendary)"] = {0, 48.30}, 
+    ["branches (uncommon)"] = {0, 47.67}, ["cotton candy (legendary)"] = {0, 38.76}, ["glitch2 (common)"] = {0, 36.75}, 
+    ["mummified (common)"] = {0, 35.52}, ["makeshift (rare)"] = {0, 34.42}, ["sparkle9 (common)"] = {0, 32.81}, 
+    ["beach (legendary)"] = {0, 32.68}, ["jd (legendary)"] = {0, 29.11}, ["frosted (common)"] = {0, 28.26}, 
+    ["zombified (rare)"] = {0, 28.08}, ["ecto (common)"] = {0, 26.27}, ["webbed (common)"] = {0, 23.85}, 
+    ["candycorn (common)"] = {0, 22.30}, ["sparkle10 (common)"] = {0, 22.26}, ["starry (rare)"] = {0, 21.64}, 
+    ["sparkle8 (common)"] = {0, 21.51}, ["sparkle7 (common)"] = {0, 20.22}, ["pumpkin (legendary)"] = {0, 20.17}, 
+    ["swirl (rare)"] = {0, 18.07}, ["watcher (rare)"] = {0, 17.94}, ["rip (common)"] = {0, 17.24}, 
+    ["skulls (uncommon)"] = {0, 16.13}, ["prism (common)"] = {0, 12.91}, ["void (uncommon)"] = {0, 12.15}, 
+    ["sparkle4 (common)"] = {0, 10.76}, ["phantom (common)"] = {0, 10.29}, ["floral (rare)"] = {0, 10.14}, 
+    ["ghostfire (rare)"] = {0, 10.08}, ["skool (common)"] = {0, 9.08}, ["sparkle5 (common)"] = {0, 8.56}, 
+    ["broken (legendary)"] = {0, 7.98}, ["tailslide (common)"] = {0, 7.63}, ["aurora (rare)"] = {0, 7.52}, 
+    ["gothic (uncommon)"] = {0, 7.17}, ["ghastly (rare)"] = {0, 6.98}, ["toxic (rare)"] = {0, 5.51}, 
+    ["vampire bat (legendary)"] = {0, 5.49}, ["ginger (legendary)"] = {0, 5.38}, ["icedriller (legendary)"] = {0, 5.38}, 
+    ["wrap (uncommon)"] = {0, 5.38}, ["nobledragon (legendary)"] = {0, 5.38}, ["nightsky (legendary)"] = {0, 5.38}, 
+    ["starry (common)"] = {0, 5.35}, ["skeleton key 2018 (common)"] = {0, 5.11}, ["pengy (common)"] = {0, 4.84}, 
+    ["eyeball (rare)"] = {0, 4.84}, ["sketchy (common)"] = {0, 4.83}, ["ollie (common)"] = {0, 4.37}, 
+    ["sidewinder (common)"] = {0, 4.29}, ["mechbug (rare)"] = {0, 4.23}, ["euro (common)"] = {0, 4.22}, 
+    ["skulls (legendary)"] = {0, 4.11}, ["scratch (legendary)"] = {0, 4.07}, ["corl (common)"] = {0, 3.72}, 
+    ["alex (common)"] = {0, 3.65}, ["hazard (uncommon)"] = {0, 3.64}, ["vampire (rare)"] = {0, 3.45}, 
+    ["pumpkin pie (uncommon)"] = {0, 3.43}, ["denis (common)"] = {0, 3.43}, ["sub (common)"] = {0, 3.42}, 
+    ["witched (legendary)"] = {0, 3.40}, ["santa's magic (legendary)"] = {0, 3.23}, ["sparkle3 (common)"] = {0, 3.23}, 
+    ["sparkle2 (common)"] = {0, 3.23}, ["sparkle1 (common)"] = {0, 3.23}, ["blue elite (legendary)"] = {0, 3.23}, 
+    ["green elite (legendary)"] = {0, 3.23}, ["jack (rare)"] = {0, 3.22}, ["ghosty (common)"] = {0, 3.22}, 
+    ["box of blue wrapping paper (common)"] = {0, 3.22}, ["infected (common)"] = {0, 3.10}, ["santa's spirit (legendary)"] = {0, 3.08}, 
+    ["wraith (rare)"] = {0, 3.07}, ["apocalypse (common)"] = {0, 3.05}, ["candy swirl (rare)"] = {0, 2.89}, 
+    ["box of red wrapping paper (common)"] = {0, 2.68}, ["box of purple wrapping paper (common)"] = {0, 2.68}, 
+    ["snowbear (common)"] = {0, 2.58}, ["bubbles (legendary)"] = {0, 2.40}, ["indy (common)"] = {0, 2.34}, 
+    ["toxic (rare)"] = {0, 2.33}, ["lil' alien (common)"] = {0, 2.19}, ["grind (common)"] = {0, 2.18}, 
+    ["sun (rare)"] = {0, 2.18}, ["sun (common)"] = {0, 2.24}, ["asteroid (common)"] = {0, 2.14}, 
+    ["lantern (uncommon)"] = {0, 2.14}, ["meltdown (uncommon)"] = {0, 2.14}, ["orange marble (rare)"] = {0, 2.14}, 
+    ["snakebite (rare)"] = {0, 2.12}, ["chromatic (legendary)"] = {0, 1.76}, ["green marble (rare)"] = {0, 1.66}, 
+    ["overseer (legendary)"] = {0, 1.45}, ["cursed (legendary)"] = {0, 1.44}, ["badger (common)"] = {0, 1.44}, 
+    ["midnight (legendary)"] = {0, 1.44}, ["holly (uncommon)"] = {0, 1.36}, ["carrot bunny (common)"] = {0, 1.33}, 
+    ["sparkle (legendary)"] = {0, 1.33}, ["teddy (common)"] = {0, 1.33}, ["darkgun (rare)"] = {0, 1.33}, 
+    ["scarecrow (rare)"] = {0, 1.33}, ["wolf (uncommon)"] = {0, 1.33}, ["fade (legendary)"] = {0, 1.33}, 
+    ["ice camo (rare)"] = {0, 1.33}, ["santa dog (common)"] = {0, 1.33}, ["snowflake key 2018 (common)"] = {0, 1.33}, 
+    ["icecracker (legendary)"] = {0, 1.26}, ["frostflame (rare)"] = {0, 1.22}, ["witchbrew (uncommon)"] = {0, 1.22}, 
+    ["reptile (common)"] = {0, 1.22}, ["rose (uncommon)"] = {0, 1.22}, ["moon (common)"] = {0, 1.22}, 
+    ["emerald (legendary)"] = {0, 1.22}, ["roses (common)"] = {0, 1.22}, ["viper (legendary)"] = {0, 1.22}, 
+    ["gifted (uncommon)"] = {0, 1.22}, ["universe (legendary)"] = {0, 1.22}, ["valentine (common)"] = {0, 1.22}, 
+    ["goo (common)"] = {0, 1.22}, ["passion (common)"] = {0, 1.22}, ["sketch (uncommon)"] = {0, 1.21}, 
+    ["shiny (legendary)"] = {0, 1.21}, ["predator (legendary)"] = {0, 1.21}, ["elite (legendary)"] = {0, 1.20}, 
+    ["rb knife (common)"] = {0, 1.19}, ["nutcracker (uncommon)"] = {0, 1.18}, ["sweetheart (common)"] = {0, 1.15}, 
+    ["red fire (legendary)"] = {0, 1.15}, ["ribbons (common)"] = {0, 1.15}, ["etched (common)"] = {0, 1.15}, 
+    ["ornament1 (common)"] = {0, 1.15}, ["boney (common)"] = {0, 1.15}, ["eclipse (uncommon)"] = {0, 1.15}, 
+    ["patrick (common)"] = {0, 1.15}, ["2015 (common)"] = {0, 1.15}, ["hunter (common)"] = {0, 1.15}, 
+    ["green fire (legendary)"] = {0, 1.15}, ["slashed (common)"] = {0, 1.14}, ["plasmite (legendary)"] = {0, 1.11}, 
+    ["curse (rare)"] = {0, 1.11}, ["ritual (rare)"] = {0, 1.11}, ["fusion (legendary)"] = {0, 1.11}, 
+    ["heart (rare)"] = {0, 1.11}, ["nether (rare)"] = {0, 1.11}, ["checker (uncommon)"] = {0, 1.11}, 
+    ["tulip (common)"] = {0, 1.11}, ["egg (common)"] = {0, 1.11}, ["rupture (legendary)"] = {0, 1.11}, 
+    ["squire (rare)"] = {0, 1.11}, ["rune (legendary)"] = {0, 1.10}, ["pool noodle (uncommon)"] = {0, 1.08}, 
+    ["choco (common)"] = {0, 1.05}, ["witch (common)"] = {0, 1.05}, ["web (legendary)"] = {0, 1.05}, 
+    ["moonlight (uncommon)"] = {0, 1.05}, ["glowy (uncommon)"] = {0, 1.05}, ["korblox (rare)"] = {0, 0.94}, 
+    ["butterflies (rare)"] = {0, 0.89}, ["portal (rare)"] = {0, 0.89}, ["logcutter (rare)"] = {0, 0.89}, 
+    ["cupid (legendary)"] = {0, 0.88}, ["damp (rare)"] = {0, 0.79}, ["spitfire (rare)"] = {0, 0.79}, 
+    ["black (rare)"] = {0, 0.73}, ["frosty (uncommon)"] = {0, 0.68}, ["gingerheart (uncommon)"] = {0, 0.68}, 
+    ["storm (rare)"] = {0, 0.68}, ["eyes (uncommon)"] = {0, 0.68}, ["kraken (rare)"] = {0, 0.63}, 
+    ["abduction (uncommon)"] = {0, 0.56}, ["krypto (rare)"] = {0, 0.56}, ["sleigh (rare)"] = {0, 0.55}, 
+    ["fireplace (uncommon)"] = {0, 0.53}, ["snowglobe (rare)"] = {0, 0.53}, ["bio (rare)"] = {0, 0.52}, 
+    ["fall camo (uncommon)"] = {0, 0.50}, ["spectrum (rare)"] = {0, 0.47}, ["galaxy (rare)"] = {0, 0.42}, 
+    ["marble (uncommon)"] = {0, 0.42}, ["trees (common)"] = {0, 0.42}, ["scarf (common)"] = {0, 0.42}, 
+    ["nova (rare)"] = {0, 0.42}, ["purple (rare)"] = {0, 0.37}, ["pumpkin patch (uncommon)"] = {0, 0.37}, 
+    ["aliens (common)"] = {0, 0.37}, ["musical (rare)"] = {0, 0.37}, ["vortex (rare)"] = {0, 0.36}, 
+    ["ace (rare)"] = {0, 0.36}, ["pig (uncommon)"] = {0, 0.36}, ["cats (common)"] = {0, 0.35}, 
+    ["pier (rare)"] = {0, 0.35}, ["neopolitan (uncommon)"] = {0, 0.35}, ["penguin (common)"] = {0, 0.32}, 
+    ["witch's brew (rare)"] = {0, 0.32}, ["hacker (rare)"] = {0, 0.32}, ["abstract (rare)"] = {0, 0.32}, 
+    ["tropical (rare)"] = {0, 0.32}, ["pink (uncommon)"] = {0, 0.32}, ["cheesy (uncommon)"] = {0, 0.32}, 
+    ["pool (uncommon)"] = {0, 0.31}, ["bacon (rare)"] = {0, 0.31}, ["eyeball (common)"] = {0, 0.31}, 
+    ["circuit (uncommon)"] = {0, 0.26}, ["red (uncommon)"] = {0, 0.26}, ["blue (uncommon)"] = {0, 0.26}, 
+    ["brush (uncommon)"] = {0, 0.26}, ["irevolver (rare)"] = {0, 0.26}, ["paper (uncommon)"] = {0, 0.26}, 
+    ["imbued (rare)"] = {0, 0.26}, ["sunny (rare)"] = {0, 0.25}, ["candle (common)"] = {0, 0.25}, 
+    ["galactic (common)"] = {0, 0.25}, ["toy (common)"] = {0, 0.25}, ["carved (common)"] = {0, 0.24}, 
+    ["xbox (common)"] = {0, 0.21}, ["space (rare)"] = {0, 0.21}, ["sharky (rare)"] = {0, 0.21}, 
+    ["yummy (rare)"] = {0, 0.20}, ["forest (common)"] = {0, 0.19}, ["future (uncommon)"] = {0, 0.15}, 
+    ["jigsaw (common)"] = {0, 0.15}, ["robot (rare)"] = {0, 0.15}, ["ribbon (common)"] = {0, 0.15}, 
+    ["night (uncommon)"] = {0, 0.15}, ["caution (uncommon)"] = {0, 0.15}, ["aqua (common)"] = {0, 0.15}, 
+    ["lucky (uncommon)"] = {0, 0.15}, ["missing (uncommon)"] = {0, 0.15}, ["stalker (uncommon)"] = {0, 0.15}, 
+    ["cheddar (common)"] = {0, 0.15}, ["turtles (uncommon)"] = {0, 0.15}, ["nightfire (rare)"] = {0, 0.12}, 
+    ["nightfire (common)"] = {0, 0.12}, ["donut (uncommon)"] = {0, 0.12}, ["igloo (common)"] = {0, 0.11}, 
+    ["chick (common)"] = {0, 0.11}, ["polar bear (common)"] = {0, 0.11}, ["meadow (uncommon)"] = {0, 0.11}, 
+    ["wreaths (uncommon)"] = {0, 0.11}, ["hazmat (uncommon)"] = {0, 0.11}, ["heartbreak (rare)"] = {0, 0.11}, 
+    ["stainless (common)"] = {0, 0.11}, ["hive (uncommon)"] = {0, 0.11}, ["ghostly (uncommon)"] = {0, 0.11}, 
+    ["pirate (uncommon)"] = {0, 0.11}, ["cherry (common)"] = {0, 0.11}, ["retro (uncommon)"] = {0, 0.11}, 
+    ["whiteout (common)"] = {0, 0.11}, ["spring (rare)"] = {0, 0.11}, ["spider (common)"] = {0, 0.10}, 
+    ["candles (common)"] = {0, 0.10}, ["giftwrap (common)"] = {0, 0.10}, ["wooden (uncommon)"] = {0, 0.10}, 
+    ["wood (common)"] = {0, 0.10}, ["marina (uncommon)"] = {0, 0.10}, ["snowfall (common)"] = {0, 0.10}, 
+    ["deep sea (rare)"] = {0, 0.10}, ["wanwood (uncommon)"] = {0, 0.10}, ["fall (common)"] = {0, 0.10}, 
+    ["paws (uncommon)"] = {0, 0.10}, ["hot chocolate (common)"] = {0, 0.09}, ["ice (common)"] = {0, 0.08}, 
+    ["borders (common)"] = {0, 0.08}, ["slate (common)"] = {0, 0.06}, ["jellyfish (uncommon)"] = {0, 0.06}, 
+    ["static (common)"] = {0, 0.06}, ["skyline (common)"] = {0, 0.06}, ["coconut (common)"] = {0, 0.06}, 
+    ["linked (common)"] = {0, 0.06}, ["cold (common)"] = {0, 0.06}, ["clan (common)"] = {0, 0.06}, 
+    ["dolphins (common)"] = {0, 0.06}, ["decorated (uncommon)"] = {0, 0.06}, ["hardened (common)"] = {0, 0.06}, 
+    ["engraved (common)"] = {0, 0.06}, ["yellow (common)"] = {0, 0.06}, ["juice (common)"] = {0, 0.06}, 
+    ["tiger (uncommon)"] = {0, 0.06}, ["news (common)"] = {0, 0.06}, ["copper (common)"] = {0, 0.06}, 
+    ["hl2 (common)"] = {0, 0.06}, ["high tech (uncommon)"] = {0, 0.06}, ["bells (common)"] = {0, 0.06}, 
+    ["fallout (common)"] = {0, 0.06}, ["floatie (uncommon)"] = {0, 0.06}, ["turtle (common)"] = {0, 0.06}, 
+    ["big kill (common)"] = {0, 0.06}, ["infiltrator (common)"] = {0, 0.06}, ["pea (common)"] = {0, 0.06}, 
+    ["cardboard (common)"] = {0, 0.06}, ["eco (common)"] = {0, 0.06}, ["graffiti (uncommon)"] = {0, 0.06}, 
+    ["oily (common)"] = {0, 0.06}, ["orange (common)"] = {0, 0.06}, ["sandy (common)"] = {0, 0.06}, 
+    ["star (common)"] = {0, 0.06}, ["toy (common)"] = {0, 0.06}, ["8bit (common)"] = {0, 0.06}, 
+    ["bleached (common)"] = {0, 0.06}, ["biogun (uncommon)"] = {0, 0.06}, ["bit (common)"] = {0, 0.06}, 
+    ["iron (common)"] = {0, 0.06}, ["splatter (common)"] = {0, 0.06}, ["brown (common)"] = {0, 0.06}, 
+    ["green (common)"] = {0, 0.06}, ["plaid (common)"] = {0, 0.05}, ["balloons (common)"] = {0, 0.05}, 
+    ["tourist (common)"] = {0, 0.05}, ["cherries (common)"] = {0, 0.04}, ["duckies (common)"] = {0, 0.04}, 
+    ["combat ii (common)"] = {0, 9.46}, ["combat (common)"] = {0, 0.06}, ["shaded (common)"] = {0, 0.05}, 
+    ["lovely (common)"] = {0, 0.05}, ["sand (common)"] = {0, 0.04}, ["splat (common)"] = {0, 0.06}, 
+    ["leaf (common)"] = {0, 0.05}, ["ornaments (uncommon)"] = {0, 0.09},
+
+    -- ТЕ САМЫЕ ПОТЕРЯШКИ, КОТОРЫЕ ТЫ ЗАМЕТИЛ
+    ["camo (uncommon)"] = {0, 0.11}, ["camo (common)"] = {0, 0.11},
+    ["floral (uncommon)"] = {0, 0.25}, ["floral (common)"] = {0, 0.11},
+    ["clownfish (common)"] = {0, 0.06},
+    ["bunnies (legendary)"] = {0, 4.29},
+    ["neon (rare)"] = {0, 1.08}, ["neon (common)"] = {0, 1.15}, ["neon (uncommon)"] = {0, 0.21},
+    
+    -- СТАНДАРТНЫЕ МЕЛОЧИ
+    ["default knife"] = {0,0}, 
+    ["default gun"] = {0,0}, 
+    ["mystery key (common)"] = {0, 1}, 
+    ["blue papers (common)"] = {0, 2}, 
+    ["box of fertilizer (common)"] = {0, 2.02}, 
+    ["skeleton key (common)"] = {0, 5},
+    ["candies (common)"] = {0, 0.84},
+    ["gifts 2015 (common)"] = {0, 1.22},
+    ["box of green wrapping paper (common)"] = {0, 1.98},
+    ["box of ultra wrapping paper (common)"] = {0, 5.37},
+    ["box of gold wrapping paper (common)"] = {0, 3.74},
+    ["box of blue wrapping paper (common)"] = {0, 3.22},
+    ["box of red wrapping paper (common)"] = {0, 2.68},
+    ["box of purple wrapping paper (common)"] = {0, 2.68}
+}
+
+-- ПОЛУЧЕНИЕ ЗНАЧЕНИЯ ИЗ БАЗЫ
+local function GetItemValue(slotFrame, cosmeticName)
+    if not cosmeticName then return nil end
+    local cleanNameLower = string.lower(string.match(cosmeticName, "^%s*(.-)%s*$"))
+    
+    local typeTag = ""
+    local typeLabel = slotFrame:FindFirstChild("Type", true)
+    if typeLabel and typeLabel:IsA("TextLabel") and typeLabel.Text ~= "" then
+        typeTag = " (" .. string.lower(typeLabel.Text) .. ")" 
+    end
+    
+    local isChroma = false
+    local tagsFolder = slotFrame:FindFirstChild("Tags")
+    if tagsFolder then
+        local chromaTag = tagsFolder:FindFirstChild("Chroma")
+        if chromaTag and chromaTag:IsA("GuiObject") and chromaTag.Visible then
+            isChroma = true
+        end
+    end
+    
+    local rarityTag = ""
+    local color = nil
+    local itemNameObj = slotFrame:FindFirstChild("ItemName")
+    if itemNameObj and itemNameObj:IsA("GuiObject") and itemNameObj.BackgroundTransparency < 1 then
+        color = itemNameObj.BackgroundColor3
+    else
+        local bg = slotFrame:FindFirstChild("BG", true)
+        if bg and bg:IsA("GuiObject") then
+            color = bg:IsA("ImageLabel") and bg.ImageColor3 or bg.BackgroundColor3
+        end
+    end
+
+    if color then
+        local best, d1, d2 = nil, math.huge, math.huge
+        for tier, ref in pairs(TIERS) do
+            local d = dist2(color, ref)
+            if d < d1 then best, d1, d2 = tier, d, d1
+            elseif d < d2 then d2 = d end
+        end
+        if d1 < 0.15 and (d2 == 0 or d1 < d2 * 0.4) then
+            rarityTag = " (" .. best .. ")"
+        end
+    end
+
+    local variations = {}
+    if isChroma then
+        table.insert(variations, cleanNameLower .. " (chroma)" .. typeTag)
+        table.insert(variations, cleanNameLower .. " (chroma)")
+    end
+    if rarityTag ~= "" then
+        table.insert(variations, cleanNameLower .. rarityTag .. typeTag)
+        table.insert(variations, cleanNameLower .. rarityTag)
+    end
+    if typeTag ~= "" then
+        table.insert(variations, cleanNameLower .. typeTag)
+    end
+    table.insert(variations, cleanNameLower)
+
+    for _, varName in ipairs(variations) do
+        local result = Database[varName]
+        if result then return result end
+    end
+    return nil
+end
+
+-- АНАЛИЗ ИНВЕНТАРЯ И ОТРИСОВКА
+local function IsTradableCategory(guiObject)
+    if guiObject:FindFirstAncestor("TradeGUI") then return true end
+    if guiObject:FindFirstAncestor("Weapons") or guiObject:FindFirstAncestor("Pets") then return true end
+    return false
+end
+
+local function GetSlotMultiplier(slotFrame)
+    for _, child in ipairs(slotFrame:GetDescendants()) do
+        if child:IsA("TextLabel") and child.Name ~= "PriceOverlayTag" and child.Visible and child.Text and child.Text ~= "" then
+            local clean = string.gsub(child.Text, "<[^>]+>", "")
+            clean = string.gsub(clean, "%s+", "")
+            clean = string.lower(clean)
+            local found = string.match(clean, "^x(%d+)$")
+            if found then return tonumber(found) end
+        end
+    end
+    return 1
+end
+
+local function ParseItemNameObj(slotFrame)
+    local itemNameObj = slotFrame:FindFirstChild("ItemName")
+    if itemNameObj then
+        if itemNameObj:IsA("StringValue") then return itemNameObj.Value
+        elseif itemNameObj:IsA("TextLabel") then return itemNameObj.Text
+        elseif itemNameObj:IsA("GuiObject") then
+            local label = itemNameObj:FindFirstChild("Label") or itemNameObj:FindFirstChild("TextLabel")
+            if label and label:IsA("TextLabel") then return label.Text end
+        end
+    end
+    return nil
+end
+
+-- ОСНОВНОЙ 4Hz ПОТОК (Вместо RenderStepped)
+Session.Loop = task.spawn(function()
+    while task.wait(0.25) do
+        -- 1. ОБНОВЛЕНИЕ ТЕГОВ В ИНВЕНТАРЕ
+        for i = #Session.InjectedSlots, 1, -1 do
+            local entry = Session.InjectedSlots[i]
+            if not entry.Slot or not entry.Slot.Parent then
+                if entry.Tag then entry.Tag:Destroy() end
+                table.remove(Session.InjectedSlots, i)
+            else
+                local name = ParseItemNameObj(entry.Slot)
+                if name and name ~= "" and not name:match("^%s*$") then
+                    local values = GetItemValue(entry.Slot, name)
+                    if values == "!" then
+                        entry.Tag.Text = '<font color="#FF0000"><b>❗️</b></font>'
+                        entry.Tag.Visible = true
+                    elseif type(values) == "table" then
+                        local v2 = values[2] or 0
+                        entry.Tag.Text = string.format('(<font color="#FFFF00">%s</font>)', tostring(v2))
+                        entry.Tag.Visible = true
+                    else
+                        entry.Tag.Text = '<font color="#FF0000"><b>?</b></font>'
+                        entry.Tag.Visible = true
+                    end
+                else
+                    entry.Tag.Visible = false
+                end
+            end
+        end
+
+        -- 2. КАЛЬКУЛЯТОР ТРЕЙДА (Безопасно)
+        local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
+        if tradeGui then
+            local tradeSection = tradeGui:FindFirstChild("Container") and tradeGui.Container:FindFirstChild("Trade")
+            if tradeSection then
+                local function calcOffer(offerName)
+                    local offer = tradeSection:FindFirstChild(offerName)
+                    if not offer then return end
+                    local container = offer:FindFirstChild("Container")
+                    local title = offer:FindFirstChild("Title")
+                    if not container or not title then return end
+                    
+                    local t2 = 0
+                    local hasAmbig = false
+                    for _, slot in ipairs(container:GetChildren()) do
+                        if slot:IsA("GuiObject") and slot.Visible and slot:FindFirstChild("ItemName") then
+                            local name = ParseItemNameObj(slot)
+                            if name and name ~= "" and not name:match("^%s*$") then
+                                local values = GetItemValue(slot, name)
+                                if values == "!" then
+                                    hasAmbig = true
+                                elseif type(values) == "table" then
+                                    local mult = GetSlotMultiplier(slot)
+                                    t2 = t2 + ((values[2] or 0) * mult)
+                                end
+                            end
+                        end
+                    end
+                    
+                    title.RichText = true
+                    local fmt = string.format('(<font color="#FFFF00">%.2f</font>)', t2):gsub("%.00", "")
+                    if hasAmbig then fmt = fmt .. ' <font color="#FF0000">+❗️</font>' end
+                    title.Text = fmt
+                end
+                calcOffer("YourOffer")
+                calcOffer("TheirOffer")
+            end
+        end
+    end
+end)
+
+-- ИНЪЕКЦИЯ ТЕГОВ
+local function HookSlot(slotFrame)
+    if not slotFrame:IsA("GuiObject") or not slotFrame:FindFirstChild("ItemName") then return end
+    if not IsTradableCategory(slotFrame) then return end
+    if slotFrame:GetAttribute("HasPriceOverlay") then return end
+    slotFrame:SetAttribute("HasPriceOverlay", true)
+
+    pcall(function()
+        local priceLabel = Instance.new("TextLabel")
+        priceLabel.Name = "PriceOverlayTag"
+        priceLabel.Size = UDim2.new(1, 0, 0, 20)
+        priceLabel.Position = UDim2.new(0, 0, 0, 2) 
+        priceLabel.BackgroundTransparency = 1
+        priceLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        priceLabel.TextStrokeTransparency = 1 
+        priceLabel.TextSize = 18 
+        priceLabel.Font = Enum.Font.SourceSansItalic 
+        priceLabel.RichText = true 
+        priceLabel.ZIndex = 20
+        priceLabel.Parent = slotFrame
+
+        table.insert(Session.Tags, priceLabel)
+        table.insert(Session.InjectedSlots, {Slot = slotFrame, Tag = priceLabel})
+    end)
+end
+
+local function WatchGUI(rootTarget)
+    if not rootTarget then return end
+    for _, desc in ipairs(rootTarget:GetDescendants()) do HookSlot(desc) end
+    local conn = rootTarget.DescendantAdded:Connect(function(desc)
+        task.defer(function() HookSlot(desc) end)
+    end)
+    table.insert(Session.Connections, conn)
+end
+
+local function Initialize()
+    local tradeGui = PlayerGui:FindFirstChild("TradeGUI")
+    if tradeGui then WatchGUI(tradeGui) end
+
+    local mainGui = PlayerGui:FindFirstChild("MainGUI")
+    if mainGui then
+        local gameFolder = mainGui:FindFirstChild("Game")
+        if gameFolder then
+            if gameFolder:FindFirstChild("Inventory") then WatchGUI(gameFolder.Inventory) end
+            if gameFolder:FindFirstChild("ViewProfile") then WatchGUI(gameFolder.ViewProfile) end
+        end
+    end
+end
+
+Initialize()
+table.insert(Session.Connections, PlayerGui.ChildAdded:Connect(function(child)
+    if child.Name == "MainGUI" or child.Name == "TradeGUI" then
+        task.wait(1)
+        Initialize()
+    end
+end))
